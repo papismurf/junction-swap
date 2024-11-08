@@ -1,0 +1,8 @@
+fastapi~=0.104.1
+strawberry-graphql==0.243.0
+httpx==0.25.1
+python-dotenv==1.0.0
+redis==5.0.1
+networkx==3.2.1
+uvicorn==0.24.0
+pydantic-settings~=2.6.1
