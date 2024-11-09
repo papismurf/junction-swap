@@ -6,3 +6,5 @@ redis==5.0.1
 networkx==3.2.1
 uvicorn==0.24.0
 pydantic-settings~=2.6.1
+pydantic~=2.9.2
+ruff==0.7.3

@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_ignore_empty=True, extra="ignore"
@@ -9,5 +10,5 @@ class Settings(BaseSettings):
     CHAIN_ID: str = "bsc"  # Binance Smart Chain as example
     UPDATE_INTERVAL: int = 300  # 5 minutes
 
-    class Config:
-        env_file = ".env"
+
+settings = Settings()
