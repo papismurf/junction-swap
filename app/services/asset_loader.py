@@ -139,6 +139,9 @@ class AssetLoader:
 
     async def start_updating(self):
         """Start background updates for both tokens and pools"""
+        # Wait for TokenStore to be ready
+        await self.token_store.wait_ready()
+
         while True:
             try:
                 # Fetch top tokens and pools concurrently

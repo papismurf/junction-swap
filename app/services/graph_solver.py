@@ -2,11 +2,10 @@ from decimal import Decimal, ROUND_DOWN
 import networkx as nx
 from typing import List, Optional, Dict, Tuple
 from app.models import Pool, SwapRoute, Token
-from app.services.token_store import TokenStore
 
 
 class GraphSolver:
-    def __init__(self, token_store: TokenStore):
+    def __init__(self, token_store):
         self.token_store = token_store
         self.graph = nx.Graph()
         self.pools: Dict[str, Pool] = {}  # Cache pools by address
@@ -15,7 +14,7 @@ class GraphSolver:
     async def update_graph(self):
         """Update the graph with current pool data"""
         try:
-            # Fetch latest pools and tokens
+            # Fetch latest pools and tokens (async calls)
             pools = await self.token_store.get_all_pools()
             tokens = await self.token_store.get_all_tokens()
 
@@ -50,8 +49,11 @@ class GraphSolver:
                     reserve1=float(pool.reserve1)
                 )
 
+            print(f"Graph updated: {len(self.graph.nodes)} nodes, {len(self.graph.edges)} edges")
+
         except Exception as e:
             print(f"Error updating graph: {str(e)}")
+            raise  # Re-raise the exception for proper error handling
 
     def _calculate_edge_weight(self, pool: Pool) -> float:
         """
@@ -90,44 +92,46 @@ class GraphSolver:
             amount_in: Decimal,
             max_hops: int = 3
     ) -> Optional[SwapRoute]:
-        """
-        Find the best route for swapping between two tokens.
-
-        Args:
-            token_in_address: Address of input token
-            token_out_address: Address of output token
-            amount_in: Input amount
-            max_hops: Maximum number of hops in the path
-
-        Returns:
-            SwapRoute object if route is found, None otherwise
-        """
+        """Find the best route for swapping between two tokens"""
         try:
             best_route = None
             best_output_amount = Decimal(0)
 
+            # Make sure we have the latest data
+            await self.update_graph()
+
+            # Verify tokens exist in graph
+            if not (self.graph.has_node(token_in_address) and
+                    self.graph.has_node(token_out_address)):
+                print("One or both tokens not found in graph")
+                return None
+
             # Try paths with increasing number of hops
             for n_hops in range(1, max_hops + 1):
-                # Find all simple paths with exactly n_hops hops
-                paths = list(nx.all_simple_paths(
-                    self.graph,
-                    token_in_address,
-                    token_out_address,
-                    cutoff=n_hops
-                ))
+                try:
+                    # Find all simple paths with exactly n_hops hops
+                    paths = list(nx.all_simple_paths(
+                        self.graph,
+                        token_in_address,
+                        token_out_address,
+                        cutoff=n_hops
+                    ))
 
-                # Evaluate each path
-                for path in paths:
-                    pools, output_amount = self._get_path_details(path, amount_in)
+                    # Evaluate each path
+                    for path in paths:
+                        pools, output_amount = self._get_path_details(path, amount_in)
 
-                    # Update best route if this path gives better output
-                    if output_amount > best_output_amount:
-                        best_output_amount = output_amount
-                        best_route = SwapRoute(
-                            path=path,
-                            pools=pools,
-                            estimated_output=output_amount
-                        )
+                        # Update best route if this path gives better output
+                        if output_amount > best_output_amount:
+                            best_output_amount = output_amount
+                            best_route = SwapRoute(
+                                path=path,
+                                pools=pools,
+                                estimated_output=best_output_amount
+                            )
+
+                except nx.NetworkXNoPath:
+                    continue
 
             return best_route
 
@@ -140,46 +144,42 @@ class GraphSolver:
             path: List[str],
             amount_in: Decimal
     ) -> Tuple[List[str], Decimal]:
-        """
-        Calculate the pools to use and output amount for a given path.
+        """Calculate the pools to use and output amount for a given path"""
+        try:
+            pools = []
+            current_amount = amount_in
 
-        Args:
-            path: List of token addresses in the path
-            amount_in: Input amount
+            # Process each pair of tokens in the path
+            for i in range(len(path) - 1):
+                token_in = path[i]
+                token_out = path[i + 1]
 
-        Returns:
-            Tuple of (pool_addresses, output_amount)
-        """
-        pools = []
-        current_amount = amount_in
+                # Get pool data from the graph
+                edge_data = self.graph.get_edge_data(token_in, token_out)
+                if not edge_data:
+                    return [], Decimal(0)
 
-        # Process each pair of tokens in the path
-        for i in range(len(path) - 1):
-            token_in = path[i]
-            token_out = path[i + 1]
+                pool_address = edge_data['pool_address']
+                pools.append(pool_address)
 
-            # Get pool data from the graph
-            edge_data = self.graph.get_edge_data(token_in, token_out)
-            if not edge_data:
-                return [], Decimal(0)
+                # Calculate output amount for this hop
+                pool = self.pools[pool_address]
+                current_amount = self._calculate_output_amount(
+                    pool,
+                    token_in,
+                    token_out,
+                    current_amount
+                )
 
-            pool_address = edge_data['pool_address']
-            pools.append(pool_address)
+                # If any hop returns 0, the path is invalid
+                if current_amount == Decimal(0):
+                    return [], Decimal(0)
 
-            # Calculate output amount for this hop
-            pool = self.pools[pool_address]
-            current_amount = self._calculate_output_amount(
-                pool,
-                token_in,
-                token_out,
-                current_amount
-            )
+            return pools, current_amount
 
-            # If any hop returns 0, the path is invalid
-            if current_amount == Decimal(0):
-                return [], Decimal(0)
-
-        return pools, current_amount
+        except Exception as e:
+            print(f"Error getting path details: {str(e)}")
+            return [], Decimal(0)
 
     def _calculate_output_amount(
             self,
@@ -188,18 +188,7 @@ class GraphSolver:
             token_out_address: str,
             amount_in: Decimal
     ) -> Decimal:
-        """
-        Calculate the output amount for a swap in a single pool.
-
-        Args:
-            pool: Pool object
-            token_in_address: Address of input token
-            token_out_address: Address of output token
-            amount_in: Input amount
-
-        Returns:
-            Expected output amount
-        """
+        """Calculate the output amount for a swap in a single pool"""
         try:
             # Determine if we're going token0 -> token1 or token1 -> token0
             is_token0_to_token1 = token_in_address == pool.token0.address
@@ -233,8 +222,3 @@ class GraphSolver:
         except Exception as e:
             print(f"Error calculating output amount: {str(e)}")
             return Decimal(0)
-
-    def _validate_reserves(self, pool: Pool) -> bool:
-        """Validate pool reserves are sufficient for trading"""
-        min_reserve = Decimal('1e-6')
-        return pool.reserve0 > min_reserve and pool.reserve1 > min_reserve
