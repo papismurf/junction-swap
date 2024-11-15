@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     )
     GECKOTERMINAL_API_URL: str = "https://api.geckoterminal.com/api/v2"
     REDIS_URL: str = "redis://localhost:6379"
-    CHAIN_ID: str = "bsc"  # Binance Smart Chain as example
+    CHAIN_ID: str = "ethereum"  # Can change to "polygon", etc.
     UPDATE_INTERVAL: int = 300  # 5 minutes
 
 
