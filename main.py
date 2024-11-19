@@ -19,21 +19,16 @@ background_tasks = set()
 
 async def update_graph_periodic():
     """Periodic task to update the graph"""
-    await token_store.wait_ready()  # Wait for TokenStore to be ready
     while True:
         try:
             await graph_solver.update_graph()
         except Exception as e:
-            print(f"Error in graph update: {str(e)}")
+            print(f"Error updating graph: {str(e)}")
         await asyncio.sleep(60)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for FastAPI application.
-    Handles startup and shutdown events.
-    """
     try:
         # Initialize TokenStore first
         await token_store.initialize()
@@ -54,39 +49,30 @@ async def lifespan(app: FastAPI):
         print(f"Error during startup: {str(e)}")
         raise
     finally:
-        # Shutdown: Cancel all running background tasks
         print("Shutting down background tasks...")
         for task in background_tasks:
             task.cancel()
 
-        # Wait for all tasks to complete
         if background_tasks:
             await asyncio.gather(*background_tasks, return_exceptions=True)
-
-        # Close Redis connection
-        if token_store.redis:
-            await token_store.redis.close()
-
         print("All background tasks shut down")
 
 
 # Create context for GraphQL
 async def get_context() -> Dict[str, Any]:
-    # Ensure TokenStore is ready before providing context
-    await token_store.wait_ready()
     return {
         "token_store": token_store,
         "graph_solver": graph_solver
     }
 
 
-# Create FastAPI app with lifespan handler
+# Create FastAPI app
 app = FastAPI(lifespan=lifespan)
 
 # Add GraphQL route with context
 graphql_app = GraphQLRouter(
     schema,
-    context_getter=get_context
+    context_getter=get_context,
 )
 app.include_router(graphql_app, prefix="/graphql")
 
