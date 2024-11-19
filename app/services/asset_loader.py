@@ -1,10 +1,15 @@
 import asyncio
 import httpx
-from typing import List, Dict, Optional
+import logging
+from typing import List, Dict
 from decimal import Decimal
 from app.models import Token, Pool
 from app.services.token_store import TokenStore
 from app.config import settings
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class AssetLoader:
@@ -15,29 +20,28 @@ class AssetLoader:
             timeout=30.0,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "junctionswap/1.0"  # It's good practice to identify your app
+                "User-Agent": "JunctionSwap/1.0"
             }
         )
 
     async def fetch_top_tokens(self, limit: int = 100) -> List[Token]:
-        """
-        Fetch top tokens from GeckoTerminal.
-        We'll get these from the top pools since direct token endpoint is not available.
-        """
+        """Fetch top tokens from GeckoTerminal"""
         try:
-            # Fetch top pools which will include the most important tokens
+            logger.info(f"Fetching top tokens from GeckoTerminal for network {settings.CHAIN_ID}")
+
+            # First, get the network details to ensure it's valid
             response = await self.client.get(
-                f"/networks/{settings.CHAIN_ID}/pools",
+                f"/networks/{settings.CHAIN_ID}/pools/",
                 params={
                     "page": 1,
-                    "limit": limit,
-                    "sort": "volume_24h"  # Sort by 24h volume to get most active pools
+                    "limit": limit
                 }
             )
             response.raise_for_status()
             data = response.json()
 
-            # Use a dictionary to avoid duplicate tokens
+            logger.debug(f"Received data from API: {data}")
+
             tokens_dict: Dict[str, Token] = {}
 
             for pool_data in data.get("data", []):
@@ -49,54 +53,61 @@ class AssetLoader:
                     if token0_data:
                         address = token0_data.get("address", "").lower()
                         if address and address not in tokens_dict:
-                            tokens_dict[address] = Token(
+                            token = Token(
                                 address=address,
                                 symbol=token0_data.get("symbol", ""),
                                 name=token0_data.get("name", ""),
                                 decimals=int(token0_data.get("decimals", 18)),
                                 price_usd=Decimal(str(token0_data.get("price_usd", 0)))
                             )
+                            tokens_dict[address] = token
+                            logger.info(f"Processed token0: {token.symbol} ({token.address})")
 
                     # Process token1
                     token1_data = attributes.get("token1", {})
                     if token1_data:
                         address = token1_data.get("address", "").lower()
                         if address and address not in tokens_dict:
-                            tokens_dict[address] = Token(
+                            token = Token(
                                 address=address,
                                 symbol=token1_data.get("symbol", ""),
                                 name=token1_data.get("name", ""),
                                 decimals=int(token1_data.get("decimals", 18)),
                                 price_usd=Decimal(str(token1_data.get("price_usd", 0)))
                             )
+                            tokens_dict[address] = token
+                            logger.info(f"Processed token1: {token.symbol} ({token.address})")
 
                 except Exception as e:
-                    print(f"Error processing pool tokens: {str(e)}")
+                    logger.error(f"Error processing pool tokens: {str(e)}")
                     continue
 
-            # Convert to list and save to store
             tokens = list(tokens_dict.values())
-            for token in tokens:
-                await self.token_store.save_token(token)
 
+            # Save tokens to store
+            for token in tokens:
+                success = await self.token_store.save_token(token)
+                if not success:
+                    logger.warning(f"Failed to save token: {token.symbol} ({token.address})")
+
+            logger.info(f"Successfully processed {len(tokens)} tokens")
             return tokens
 
         except httpx.HTTPError as e:
-            print(f"HTTP error fetching top tokens: {str(e)}")
+            logger.error(f"HTTP error fetching top tokens: {str(e)}\nFor more information check: {e.request.url}")
             return []
         except Exception as e:
-            print(f"Error fetching top tokens: {str(e)}")
+            logger.error(f"Error fetching top tokens: {str(e)}")
             return []
 
     async def fetch_pools(self) -> List[Pool]:
         """Fetch top pools from GeckoTerminal"""
         try:
             response = await self.client.get(
-                f"/networks/{settings.CHAIN_ID}/pools",
+                f"/networks/{settings.CHAIN_ID}/pools/",
                 params={
                     "page": 1,
-                    "limit": 100,
-                    "sort": "volume_24h"
+                    "limit": 100
                 }
             )
             response.raise_for_status()
@@ -109,69 +120,33 @@ class AssetLoader:
                     if pool:
                         await self.token_store.save_pool(pool)
                         pools.append(pool)
+                        logger.info(f"Processed pool: {pool.address}")
                 except Exception as e:
-                    print(f"Error parsing pool data: {str(e)}")
+                    logger.error(f"Error parsing pool data: {str(e)}")
                     continue
 
+            logger.info(f"Successfully processed {len(pools)} pools")
             return pools
 
         except httpx.HTTPError as e:
-            print(f"HTTP error fetching pools: {str(e)}")
+            logger.error(f"HTTP error fetching pools: {str(e)}")
             return []
         except Exception as e:
-            print(f"Error fetching pools: {str(e)}")
+            logger.error(f"Error fetching pools: {str(e)}")
             return []
-
-    async def _parse_pool_data(self, data: dict) -> Optional[Pool]:
-        """Parse pool data from API response"""
-        try:
-            attributes = data.get("attributes", {})
-
-            # Extract token data
-            token0_data = attributes.get("token0", {})
-            token1_data = attributes.get("token1", {})
-
-            token0 = Token(
-                address=token0_data.get("address", "").lower(),
-                symbol=token0_data.get("symbol", ""),
-                name=token0_data.get("name", ""),
-                decimals=int(token0_data.get("decimals", 18)),
-                price_usd=Decimal(str(token0_data.get("price_usd", 0)))
-            )
-
-            token1 = Token(
-                address=token1_data.get("address", "").lower(),
-                symbol=token1_data.get("symbol", ""),
-                name=token1_data.get("name", ""),
-                decimals=int(token1_data.get("decimals", 18)),
-                price_usd=Decimal(str(token1_data.get("price_usd", 0)))
-            )
-
-            return Pool(
-                address=attributes.get("address", "").lower(),
-                token0=token0,
-                token1=token1,
-                reserve0=Decimal(str(attributes.get("reserve0", 0))),
-                reserve1=Decimal(str(attributes.get("reserve1", 0)))
-            )
-
-        except Exception as e:
-            print(f"Error parsing pool data: {str(e)}")
-            return None
 
     async def start_updating(self):
         """Start background updates for both tokens and pools"""
+        logger.info("Starting background updates")
         await self.token_store.wait_ready()
 
         while True:
             try:
-                # Fetch data concurrently
-                await asyncio.gather(
-                    self.fetch_top_tokens(),
-                    self.fetch_pools()
-                )
+                logger.info("Starting update cycle")
+                tokens = await self.fetch_top_tokens()
+                logger.info(f"Update cycle completed. Processed {len(tokens)} tokens")
             except Exception as e:
-                print(f"Error in update cycle: {str(e)}")
+                logger.error(f"Error in update cycle: {str(e)}")
 
             await asyncio.sleep(settings.UPDATE_INTERVAL)
 

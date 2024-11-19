@@ -1,6 +1,7 @@
 from typing import List, Optional
 from decimal import Decimal
 import strawberry
+from strawberry.types import Info
 from app.models import Token as TokenModel
 
 
@@ -10,12 +11,11 @@ class Token:
     address: str
     symbol: str
     name: str
-    price_usd: float
+    price_usd: float = strawberry.field(name="priceUsd")
     decimals: int
 
     @classmethod
     def from_model(cls, token: TokenModel) -> "Token":
-        """Convert from Pydantic model to Strawberry type"""
         return cls(
             address=token.address,
             symbol=token.symbol,
@@ -27,58 +27,63 @@ class Token:
 
 @strawberry.type
 class SwapRoute:
-    """GraphQL SwapRoute type"""
     path: List[str]
     pools: List[str]
-    estimated_output: float
+    estimated_output: float = strawberry.field(name="estimatedOutput")
 
 
 @strawberry.type
 class Query:
     @strawberry.field
+    async def available_tokens(self, info: Info) -> List[Token]:
+        try:
+            token_store = info.context["token_store"]
+            tokens = await token_store.get_all_tokens()
+            return [Token.from_model(token) for token in tokens]
+        except Exception as e:
+            print(f"Error in available_tokens: {str(e)}")
+            return []
+
+    @strawberry.field
     async def top_tokens(
             self,
-            info: strawberry.types.Info,
-            limit: int = strawberry.argument(description="Number of tokens to return")
+            info: Info,
+            limit: int = 100  # Default value set here instead of in argument
     ) -> List[Token]:
-        """Get top tokens by market cap"""
-
-        # Use a default value if limit is None
-        actual_limit = limit if limit is not None else 100
-
-        # Get token_store from context
-        token_store = info.context["token_store"]
-
-        # Fetch tokens from store
-        tokens = await token_store.get_top_tokens(actual_limit)
-        return [Token.from_model(token) for token in tokens]
+        try:
+            token_store = info.context["token_store"]
+            tokens = await token_store.get_top_tokens(limit)
+            return [Token.from_model(token) for token in tokens]
+        except Exception as e:
+            print(f"Error in top_tokens: {str(e)}")
+            return []
 
     @strawberry.field
     async def best_swap_route(
             self,
-            info: strawberry.types.Info,
-            token_in: str = strawberry.argument(description="Input token address"),
-            token_out: str = strawberry.argument(description="Output token address"),
-            amount_in: float = strawberry.argument(description="Input amount"),
+            info: Info,
+            token_in: str,
+            token_out: str,
+            amount_in: float
     ) -> Optional[SwapRoute]:
-        """Find the best route for swapping between two tokens"""
-        # Get graph_solver from context
-        graph_solver = info.context["graph_solver"]
-
-        # Find best route
-        route = await graph_solver.find_best_route(
-            token_in_address=token_in,
-            token_out_address=token_out,
-            amount_in=Decimal(str(amount_in))
-        )
-
-        if route:
-            return SwapRoute(
-                path=route.path,
-                pools=route.pools,
-                estimated_output=float(route.estimated_output)
+        try:
+            graph_solver = info.context["graph_solver"]
+            route = await graph_solver.find_best_route(
+                token_in_address=token_in,
+                token_out_address=token_out,
+                amount_in=Decimal(str(amount_in))
             )
-        return None
+
+            if route:
+                return SwapRoute(
+                    path=route.path,
+                    pools=route.pools,
+                    estimated_output=float(route.estimated_output)
+                )
+            return None
+        except Exception as e:
+            print(f"Error in best_swap_route: {str(e)}")
+            return None
 
 
 # Create the schema
