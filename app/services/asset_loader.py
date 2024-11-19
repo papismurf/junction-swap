@@ -31,11 +31,7 @@ class AssetLoader:
 
             # First, get the network details to ensure it's valid
             response = await self.client.get(
-                f"/networks/{settings.CHAIN_ID}/pools/",
-                params={
-                    "page": 1,
-                    "limit": limit
-                }
+                f"/networks/{settings.CHAIN_ID}/pools/"
             )
             response.raise_for_status()
             data = response.json()
@@ -104,11 +100,7 @@ class AssetLoader:
         """Fetch top pools from GeckoTerminal"""
         try:
             response = await self.client.get(
-                f"/networks/{settings.CHAIN_ID}/pools/",
-                params={
-                    "page": 1,
-                    "limit": 100
-                }
+                f"/networks/{settings.CHAIN_ID}/pools/"
             )
             response.raise_for_status()
             data = response.json()
